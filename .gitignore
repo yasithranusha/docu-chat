@@ -50,3 +50,10 @@ alembic/versions/*.py
 
 # AI Tools
 .mcp.json
+# Sample PDFs
+books/
+LEARNING_GUIDE.md
+
+#IDE
+.idea
+.code

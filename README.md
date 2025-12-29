@@ -37,10 +37,12 @@ An AI-powered document question-answering system built with FastAPI, LangChain, 
 ```bash
 # Clone repository
 git clone <your-repo-url>
-cd docu-chat-learn
+cd docu-chat
 
 # Install dependencies
 poetry install
+# Or using Makefile:
+make install
 
 # Configure environment
 cp .env.example .env
@@ -48,9 +50,13 @@ cp .env.example .env
 
 # Run migrations
 poetry run alembic upgrade head
+# Or using Makefile:
+make migrate
 
-# Start server
+# Start development server
 poetry run uvicorn app.main:app --reload
+# Or using Makefile (recommended):
+make dev
 ```
 
 Visit http://localhost:8000/docs for API documentation.
@@ -142,15 +148,26 @@ MAX_FILE_SIZE_MB=10
 ```bash
 # Run tests
 poetry run pytest
+# Or using Makefile:
+make test
 
 # Code formatting
 poetry run black app/
+# Or using Makefile:
+make format
 
 # Linting
 poetry run ruff check app/
+# Or using Makefile:
+make lint
 
 # Type checking
 poetry run mypy app/
+# Or using Makefile:
+make typecheck
+
+# Run all quality checks
+make check
 ```
 
 ## Deployment
@@ -160,15 +177,30 @@ poetry run mypy app/
 ```bash
 # Build image
 docker build -t docu-chat .
+# Or using Makefile:
+make docker-build
 
 # Run container
 docker run -p 8000:8000 --env-file .env docu-chat
+# Or using Makefile:
+make docker-run
+
+# Stop container
+make docker-stop
+
+# View logs
+make logs
 ```
 
 ### Docker Compose
 
 ```bash
 docker-compose up
+# Or using Makefile:
+make docker-up
+
+# Stop services
+make docker-down
 ```
 
 ## How It Works

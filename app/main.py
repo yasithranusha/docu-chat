@@ -1,19 +1,31 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import api_router
+from app.config import settings
 
 app = FastAPI(
-    title="DocuChat API",
-    description="AI-powered document Q&A system",
-    version="0.1.0"
+    title=settings.API_TITLE,
+    version=settings.api_version
 )
 
-@app.get("/")
-def root():
-    return {
-        "message": "DocuChat API is running!",
-        "version": "0.1.0",
-        "docs": "/docs"
-    }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+app.include_router(api_router)
+
+@app.get("/")
+def read_root():
+    return {
+        "message": settings.API_TITLE,
+        "version": settings.api_version,
+        "environment": settings.ENVIRONMENT
+    }
