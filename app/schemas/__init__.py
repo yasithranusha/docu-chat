@@ -1,6 +1,11 @@
-"""Pydantic schemas for request/response models"""
 from .chat import ChatRequest, ChatResponse
 from .health import RootResponse, HealthResponse
+from .document import (
+    DocumentResponse,
+    DocumentUploadResponse,
+    DocumentListResponse,
+    DocumentDeleteResponse,
+)
 
 __all__ = [
     # Chat
@@ -9,4 +14,9 @@ __all__ = [
     # Health
     "RootResponse",
     "HealthResponse",
+    # Document
+    "DocumentResponse",
+    "DocumentUploadResponse",
+    "DocumentListResponse",
+    "DocumentDeleteResponse",
 ]

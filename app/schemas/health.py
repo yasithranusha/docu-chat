@@ -1,4 +1,3 @@
-"""Health and system info response schemas"""
 from pydantic import BaseModel, Field, ConfigDict
 
 
