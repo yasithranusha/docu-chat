@@ -1,6 +1,11 @@
-from .schemas import ChatRequest, ChatResponse
+"""Database models (SQLAlchemy ORM)"""
+from .document import Document, DocumentStatus
+from .chat import ChatHistory
 
 __all__ = [
-    "ChatRequest",
-    "ChatResponse"
+    # Document
+    "Document",
+    "DocumentStatus",
+    # Chat
+    "ChatHistory",
 ]
