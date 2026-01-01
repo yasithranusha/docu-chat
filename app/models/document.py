@@ -1,4 +1,3 @@
-"""Document model - SQLAlchemy ORM"""
 from sqlalchemy import Column, Integer, String, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
