@@ -1,66 +1,45 @@
 from typing import Optional, List, Dict, Any
+from sqlalchemy.orm import Session
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from pinecone import Pinecone, ServerlessSpec
+from langchain_classic.chains.history_aware_retriever import create_history_aware_retriever
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
+from pinecone import Pinecone
 from langchain_pinecone import PineconeVectorStore
 
-from app.config import settings
+from app.models import ChatHistory
 
 
 class RAGService:
 
-    def __init__(self):
+    def __init__(
+        self,
+        db: Session,
+        pinecone_client: Pinecone,
+        index_name: str,
+        embeddings: HuggingFaceEmbeddings,
+        llm: ChatGoogleGenerativeAI
+    ):
 
-        # Initialize embeddings model (converts text to vectors)
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2"  # 384 dimensions, fast, good quality
-        )
-
-        # Initialize LLM (generates answers)
-        self.llm = GoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0.3,  # Lower = more focused, higher = more creative
-            google_api_key=settings.GOOGLE_API_KEY
-        )
-
-        # Initialize Pinecone client
-        self.pc = Pinecone(api_key=settings.PINECONE_API_KEY)
-        self.index_name = settings.PINECONE_INDEX_NAME
-
-        # Create Pinecone index if it doesn't exist
-        self._initialize_pinecone()
+        self.db = db
+        self.pinecone_client = pinecone_client
+        self.index_name = index_name
+        self.embeddings = embeddings
+        self.llm = llm
+        self.index = pinecone_client.Index(index_name)
 
         # Text splitter for chunking documents
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,      # Max characters per chunk
-            chunk_overlap=200     # Overlap to preserve context
+            chunk_size=1000,
+            chunk_overlap=200
         )
 
-    def _initialize_pinecone(self) -> None:
-        existing_indexes = [idx.name for idx in self.pc.list_indexes()]
-
-        if self.index_name not in existing_indexes:
-            self.pc.create_index(
-                name=self.index_name,
-                dimension=384,  # HuggingFace all-MiniLM-L6-v2 dimension
-                metric='cosine',  # Similarity metric
-                spec=ServerlessSpec(
-                    cloud='aws',
-                    region='us-east-1'
-                )
-            )
-
-    def process_pdf(
-        self,
-        file_path: str,
-        document_id: int
-    ) -> int:
-
+    def process_pdf(self, file_path: str, document_id: int) -> int:
         # Load PDF
         loader = PyPDFLoader(file_path)
         documents = loader.load()
@@ -70,70 +49,124 @@ class RAGService:
 
         # Add metadata to each chunk
         for i, chunk in enumerate(chunks):
-            chunk.metadata["document_id"] = document_id
-            chunk.metadata["chunk_index"] = i
+            chunk.metadata.update({
+                "document_id": document_id,
+                "chunk_index": i,
+                "source": file_path
+            })
 
-        # Store in Pinecone (creates embeddings automatically)
-        PineconeVectorStore.from_documents(
-            documents=chunks,
+        # Create vector store and add documents
+        vector_store = PineconeVectorStore(
+            index=self.index,
             embedding=self.embeddings,
-            index_name=self.index_name  # Now works because os.environ has PINECONE_API_KEY
+            text_key="text"
         )
+
+        vector_store.add_documents(chunks)
 
         return len(chunks)
 
     def query(
         self,
         question: str,
+        session_id: str,
         document_id: Optional[int] = None
     ) -> Dict[str, Any]:
+        # Get conversation history for context
+        chat_history = self._get_chat_history(session_id, limit=10)
 
-        # Connect to Pinecone vector store
-        vectorstore = PineconeVectorStore(
-            index_name=self.index_name,  # Now works because os.environ has PINECONE_API_KEY
-            embedding=self.embeddings
+        # Create vector store retriever
+        vector_store = PineconeVectorStore(
+            index=self.index,
+            embedding=self.embeddings,
+            text_key="text"
         )
 
-        # Create retriever with optional filtering
-        search_kwargs = {"k": 4}  # Retrieve top 4 most similar chunks
-
+        # Add document filter if specified
+        search_kwargs = {"k": 5}
         if document_id is not None:
-            # Filter to specific document
-            search_kwargs["filter"] = {"document_id": {"$eq": document_id}}
+            search_kwargs["filter"] = {"document_id": document_id}
 
-        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+        retriever = vector_store.as_retriever(search_kwargs=search_kwargs)
 
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", "Use the following context to answer the question. "
-                      "If you don't know the answer, say so. Don't make up information.\n\n"
-                      "Context: {context}"),
-            ("human", "{input}")
+        # Create history-aware retriever (reformulates question based on context)
+        contextualize_q_system_prompt = """Given a chat history and the latest user question \
+which might reference context in the chat history, formulate a standalone question \
+which can be understood without the chat history. Do NOT answer the question, \
+just reformulate it if needed and otherwise return it as is."""
+
+        contextualize_q_prompt = ChatPromptTemplate.from_messages([
+            ("system", contextualize_q_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
         ])
 
-        # Create document chain (combines retrieved docs with LLM)
-        document_chain = create_stuff_documents_chain(self.llm, prompt)
+        history_aware_retriever = create_history_aware_retriever(
+            self.llm, retriever, contextualize_q_prompt
+        )
 
-        # Create retrieval chain (retrieves docs then generates answer)
-        qa_chain = create_retrieval_chain(retriever, document_chain)
+        # Create Q&A chain
+        qa_system_prompt = """You are an assistant for question-answering tasks. \
+Use the following pieces of retrieved context to answer the question. \
+If you don't know the answer, just say that you don't know. \
+Use three sentences maximum and keep the answer concise.\n\n{context}"""
 
-        # Execute the chain
-        result = qa_chain.invoke({"input": question})
+        qa_prompt = ChatPromptTemplate.from_messages([
+            ("system", qa_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ])
 
-        # Format response
+        question_answer_chain = create_stuff_documents_chain(self.llm, qa_prompt)
+
+        rag_chain = create_retrieval_chain(
+            history_aware_retriever,
+            question_answer_chain
+        )
+
+        # Execute chain with history
+        result = rag_chain.invoke({
+            "input": question,
+            "chat_history": chat_history
+        })
+
+        # Extract sources from context
+        sources = []
+        if "context" in result:
+            for doc in result["context"]:
+                sources.append({
+                    "content": doc.page_content,
+                    "metadata": doc.metadata
+                })
+
         return {
             "question": question,
             "answer": result["answer"],
-            "sources": [
-                {
-                    "content": doc.page_content,
-                    "metadata": doc.metadata
-                }
-                for doc in result.get("context", [])
-            ]
+            "sources": sources,
+            "session_id": session_id
         }
 
+    def _get_chat_history(self, session_id: str, limit: int = 10) -> List:
+        history_records = (
+            self.db.query(ChatHistory)
+            .filter(ChatHistory.session_id == session_id)
+            .order_by(ChatHistory.created_at.desc())
+            .limit(limit)
+            .all()
+        )
 
-# Dependency injection function for FastAPI
-def get_rag_service() -> RAGService:
-    return RAGService()
+        # Reverse to get chronological order
+        history_records.reverse()
+
+        # Convert to LangChain message format
+        messages = []
+        for record in history_records:
+            messages.append(HumanMessage(content=record.question))
+            messages.append(AIMessage(content=record.answer))
+
+        return messages
+
+    def delete_document_vectors(self, document_id: int) -> None:
+        self.index.delete(filter={"document_id": document_id})
+
+

@@ -33,8 +33,12 @@ async def chat(
     # Generate session_id if not provided
     session_id = request.session_id or str(uuid.uuid4())
 
-    # Query RAG service
-    result = rag_service.query(request.question, request.document_id)
+    # Query RAG service (includes conversational context)
+    result = rag_service.query(
+        question=request.question,
+        session_id=session_id,
+        document_id=request.document_id
+    )
 
     # Save to database
     chat_history = ChatHistory(
@@ -51,6 +55,6 @@ async def chat(
     return ChatResponse(
         question=result["question"],
         answer=result["answer"],
-        session_id=session_id,
+        session_id=result["session_id"],
         sources=result.get("sources", [])
     )

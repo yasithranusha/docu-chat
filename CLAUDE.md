@@ -52,7 +52,7 @@ poetry run uvicorn app.main:app --host 0.0.0.0 --port 8000
 This is a RAG (Retrieval-Augmented Generation) system. The core flow:
 
 1. **Document Upload** → PDF split into chunks (RecursiveCharacterTextSplitter: 1000 chars, 200 overlap)
-2. **Embedding** → Chunks converted to vectors (Google Gemini `models/embedding-001`, dim=768)
+2. **Embedding** → Chunks converted to vectors (HuggingFace `all-MiniLM-L6-v2`, dim=384, free, runs locally)
 3. **Storage** → Vectors in Pinecone (cosine metric), metadata in PostgreSQL
 4. **Query** → User question embedded → Semantic search in Pinecone → Top-k retrieval
 5. **Generation** → Retrieved context + question → Gemini Pro → Answer
@@ -128,6 +128,6 @@ Required `.env` variables:
 - All document processing must be async to avoid blocking FastAPI
 - When creating routes, ensure proper error handling and logging
 - Session management is critical for conversational features
-- Pinecone index must have dimension=768 for Google embedding-001
+- Pinecone index must have dimension=384 for HuggingFace all-MiniLM-L6-v2
 - Use dependency injection for database sessions (don't create sessions in routes)
 - Follow the progressive implementation approach from LEARNING_GUIDE.md
