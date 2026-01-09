@@ -2,14 +2,18 @@ import os
 import shutil
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import get_db
 from app.models import Document, DocumentStatus
 from app.schemas import DocumentUploadResponse, DocumentResponse
 from app.services import RAGService, get_rag_service
 from app.config import settings
+from app.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -34,9 +38,15 @@ async def upload_document(
     4. Process document into chunks (status=PROCESSING)
     5. Update status to COMPLETED or FAILED
     """
+    logger.info(f"Upload request received for file: {file.filename}")
+
     # Validate file type
     if not file.filename or not file.filename.endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are allowed")
+        logger.warning(f"Invalid file type uploaded: {file.filename}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF files are allowed"
+        )
 
     # Sanitize filename (prevent path traversal)
     safe_filename = Path(file.filename).name
@@ -53,34 +63,51 @@ async def upload_document(
     file_path = os.path.join(upload_dir, unique_filename)
 
     # Create database record with status=PENDING
-    db_document = Document(
-        filename=safe_filename,
-        file_path=file_path,
-        status=DocumentStatus.PENDING
-    )
-    db.add(db_document)
-    db.commit()
-    db.refresh(db_document)
+    try:
+        db_document = Document(
+            filename=safe_filename,
+            file_path=file_path,
+            status=DocumentStatus.PENDING
+        )
+        db.add(db_document)
+        db.commit()
+        db.refresh(db_document)
+        logger.info(f"Created document record with ID: {db_document.id}")
+
+    except SQLAlchemyError as e:
+        logger.error(f"Database error creating document: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create document record"
+        )
 
     try:
         # Save file to disk
         try:
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
-        except Exception as e:
-            # Update status to FAILED
+            logger.info(f"File saved to: {file_path}")
+
+        except IOError as e:
+            logger.error(f"Failed to save file: {str(e)}")
             db_document.status = DocumentStatus.FAILED
             db.commit()
-            raise HTTPException(500, f"Failed to save file: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save file: {str(e)}"
+            )
         finally:
             await file.close()
 
         # Update status to PROCESSING
         db_document.status = DocumentStatus.PROCESSING
         db.commit()
+        logger.info(f"Processing document ID: {db_document.id}")
 
         # Process with RAG service
         chunks = rag_service.process_pdf(file_path, db_document.id)
+        logger.info(f"Document processed: {chunks} chunks created")
 
         # Update status to COMPLETED
         db_document.chunks_count = chunks
@@ -88,19 +115,41 @@ async def upload_document(
         db.commit()
         db.refresh(db_document)
 
+        logger.info(f"Document {db_document.id} processing completed successfully")
+
         # Return success response
         return DocumentUploadResponse(
             message="Document uploaded and processed successfully",
             document=DocumentResponse.model_validate(db_document)
         )
 
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+
     except Exception as e:
-        # Update status to FAILED on any error
-        db_document.status = DocumentStatus.FAILED
-        db.commit()
+        # Log unexpected errors
+        logger.error(
+            f"Unexpected error processing document {db_document.id}: "
+            f"{type(e).__name__} - {str(e)}"
+        )
+
+        # Update status to FAILED
+        try:
+            db_document.status = DocumentStatus.FAILED
+            db.commit()
+        except SQLAlchemyError as db_err:
+            logger.error(f"Failed to update document status: {str(db_err)}")
 
         # Clean up file if it exists
         if os.path.exists(file_path):
-            os.remove(file_path)
+            try:
+                os.remove(file_path)
+                logger.info(f"Cleaned up file: {file_path}")
+            except OSError as os_err:
+                logger.error(f"Failed to clean up file: {str(os_err)}")
 
-        raise HTTPException(500, f"Failed to process document: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process document: {str(e)}"
+        )

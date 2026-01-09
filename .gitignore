@@ -43,6 +43,7 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
 # Alembic
 alembic/versions/*.py

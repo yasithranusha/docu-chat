@@ -234,29 +234,3 @@ docu-chat-learn/
 ├── pyproject.toml           # Dependencies
 └── README.md
 ```
-
-## Contributing
-
-Contributions welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details
-
-## Author
-
-**Yasith Silva**
-- Email: yasithranusha24@gmail.com
-- GitHub: [@yasithranusha](https://github.com/yasithranusha)
-
-## Acknowledgments
-
-- LangChain for the RAG framework
-- Google Gemini for AI capabilities
-- Pinecone for vector database
